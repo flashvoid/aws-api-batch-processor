@@ -46,11 +46,7 @@ run_command () {
 }
 
 check_permissions () {
-	if [[ $RUN_CMD != "aws" ]]; then
-		return 1
-	else
-		return 0
-	fi
+	source permissions.sh
 }
 
 notify_ci () {
