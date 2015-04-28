@@ -1,0 +1,178 @@
+{
+  "AWSTemplateFormatVersion" : "2010-09-09",
+
+  "Description" : "api-batch-processor",
+
+  "Parameters" : {
+    "AMI" : {
+      "Description" : "AMI to use",
+      "Type" : "String",
+      "Default" : ""
+    },
+    "InstanceType" : {
+      "Description" : "Type of EC2 instance to launch",
+      "Type" : "String",
+      "Default" : "t1.micro"
+    },
+    "KeyName" : {
+      "Description" : "The EC2 Key Pair to allow SSH access to the instances",
+      "Default" : "",
+      "Type" : "String"
+    },
+    "ASGMAX" :  {
+      "Description" : "Maximum number of servers in web autoscaling group",
+      "Default" : "1",
+      "Type" : "String"
+    },
+    "ASGMIN" :  {
+      "Description" : "Minimum number of servers in web autoscaling group",
+      "Default" : "1",
+      "Type" : "String"
+    },
+    "AZs" : {
+	    "Description" : "List of availability zones for WEB servers group",
+	    "Default" : "",
+	    "Type" : "CommaDelimitedList"
+    },
+    "ASGSubnets" : {
+	    "Description" : "List of subnets to use for web servers group",
+	    "Default" : "",
+	    "Type" : "CommaDelimitedList"
+    },
+    "VpcId" : {
+	    "Description" : "Id of the VPC to use",
+	    "Default" : "",
+	    "Type" : "String"
+    }
+  },
+
+  "Outputs" : {
+  },
+
+  "Resources" : {
+
+    "IAMUser" : {
+      "Type" : "AWS::IAM::User",
+      "Properties" : {
+        "Policies" : [
+        {
+          "PolicyName" : "IAMAccess",
+          "PolicyDocument" : {
+            "Statement" : [{
+              "Effect"    : "Allow",
+              "Action"    : "*",
+              "Resource"  : "*"
+            }]
+          }
+        }]
+      }
+    },
+
+    "HostKeys" : {
+      "Type" : "AWS::IAM::AccessKey",
+      "Properties" : {
+        "UserName" : { "Ref" : "IAMUser" }
+      }
+    },
+
+
+    "WebServerGroup" : {
+      "Type" : "AWS::AutoScaling::AutoScalingGroup",
+      "Properties" : {
+        "AvailabilityZones" : { "Ref" : "AZs" },
+        "LaunchConfigurationName" : { "Ref" : "LaunchConfig" },
+        "MinSize" : { "Ref" : "ASGMIN" },
+        "MaxSize" : { "Ref" : "ASGMAX" },
+	"VPCZoneIdentifier" : { "Ref" : "ASGSubnets" }
+      }
+    },
+
+
+    "InstanceSecurityGroup" : {
+      "Type" : "AWS::EC2::SecurityGroup",
+      "Properties" : {
+	"VpcId" : { "Ref" : "VpcId" },
+        "GroupDescription" : "Just a scurity group"
+      }
+    },
+
+
+    "LaunchConfig" : {
+      "Type" : "AWS::AutoScaling::LaunchConfiguration",
+      "Metadata" : {
+        "AWS::CloudFormation::Init" : {
+          "config": {
+            "packages" : {
+              "apt" : {
+                "git" : [],
+                "jq" : [],
+                "xfsprogs" : [],
+                "runit" : []
+              },
+              "python" : {
+                "awscli" : []
+              }
+            },
+            "files" : {
+              "/root/.aws/config" : {
+                "content" : { "Fn::Join" : ["\n", [
+                  "[default]",
+                  "output = text",
+                  "region = ap-southeast-2",
+                  "aws_access_key_id = {{access_key}}",
+                  "aws_secret_access_key = {{secret_key}}"
+                ]]},
+                "context" : {
+                  "access_key"  : { "Ref" : "HostKeys" },
+                  "secret_key"  : { "Fn::GetAtt" : ["HostKeys", "SecretAccessKey"]}
+                },
+                "mode"    : "000600",
+                "owner"   : "root",
+                "group"   : "root"
+              },
+              "/root/api-sv/log/run" : {
+                "content" : { "Fn::Join" : ["\n", [
+                  "#!/bin/bash",
+                  "cd /root/code",
+                  "exec svlogd -tt /var/log/api"
+                ]]},
+                "mode"    : "000755",
+                "owner"   : "root",
+                "group"   : "root"
+              },
+              "/root/api-sv/run" : {
+                "content" : { "Fn::Join" : ["\n", [
+                  "#!/bin/bash",
+                  "cd /root/code",
+                  "exec bash -x /root/code/processor.sh 2>&1"
+                ]]},
+                "mode"    : "000755",
+                "owner"   : "root",
+                "group"   : "root"
+              }
+            }
+          }
+        }
+      },
+      "Properties" : {
+        "KeyName" : { "Ref" : "KeyName" },
+        "ImageId" : { "Ref" : "AMI" },
+	"AssociatePublicIpAddress" : "true",
+        "UserData" : { "Fn::Base64" : { "Fn::Join" : ["", [
+          "#!/bin/bash -ex\n",
+          " exec &>>/var/log/user_data_sh.log\n",
+          " apt-get -y install python-setuptools\n",
+          " easy_install https://s3.amazonaws.com/cloudformation-examples/aws-cfn-bootstrap-latest.tar.gz\n",
+          " cfn-init --region ", { "Ref" : "AWS::Region" },
+          "    -s ", { "Ref" : "AWS::StackId" }, " -r LaunchConfig ", "|| error_exit 'Failed to run cfn-init'\n",
+          " git clone https://github.com/flashvoid/aws-api-batch-processor.git /root/code\n",
+          " mkdir /var/log/api\n",
+          " ln -s /root/api-sv /etc/service\n"
+      ]]}},
+        "SecurityGroups" : [ { "Ref" : "InstanceSecurityGroup" } ],
+        "InstanceType" : { "Ref" : "InstanceType" }
+      }
+    }
+
+  }
+}
